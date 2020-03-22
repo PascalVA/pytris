@@ -1,116 +1,269 @@
 #!/usr/bin/env python3
 
-from assets import tetrominoes
 from random import choice
 from time import sleep
+from copy import copy
 
 import curses
 import sys
 
-WALL_CHAR = "#"
+from assets import tetrominoes
 
-BLOCK_CHAR = "X"
-BLOCK_WIDTH = 4
+DEBUG = True
 
+BLOCK_CHAR = "█"
+WALL_CHAR = "█"
+
+CONFIG_KEY_UP = "w"
 CONFIG_KEY_LEFT = "a"
 CONFIG_KEY_DOWN = "s"
 CONFIG_KEY_RIGHT = "d"
 CONFIG_KEY_ROTATE_LEFT = "q"
 CONFIG_KEY_ROTATE_RIGHT = "e"
-CONFIG_KEY_ROTATE_QUIT = "x"
+CONFIG_KEY_PAUSE = "p"
+CONFIG_KEY_QUIT = "x"
 
 
-def draw_field(window):
-    for y in range(5, 21):
-        window.addch(y, 15, WALL_CHAR)
-        window.addch(y, 27, WALL_CHAR)
-    else:
-        window.addstr(y, 15, WALL_CHAR * 12)
+class Area(object):
+
+    def __init__(self):
+        self.area = []
+        self.width = 12
+        self.height = 18
+        self.offset_x = 0
+        self.offset_y = 0
+
+        # generate playable area
+        self.area = []
+        for idx in range(0, (self.width * self.height)):
+            if (idx + 1) % self.width == 0 \
+                    or idx % self.width == 0 \
+                    or idx // self.width == self.height - 1:
+                self.area.append(9)
+            else:
+                self.area.append(0)
+
+    def get_point(self, x, y):
+        idx = y * self.width + x
+        return self.area[idx]
+
+    def get_points(self):
+        for i in range(0, len(self.area)):
+            y = i // self.width
+            x = i % self.width
+            yield x, y
 
 
+def blank_line(area):
+    return [9] + ([0] * (area.width - 2)) + [9]
 
-def draw_piece(piece, rotation, width, offset_x, offset_y, window):
-    # loop over all points in the list
-    w = width
-    for i in range(0, len(piece)-1):
-        y = i // w
-        x = i % w
 
-        window.addch(0, 0, str(rotation))
+def flash_lines(area, lines, screen_offset_x, screen_offset_y, window):
+    for i in [3, 0, 3]:
+        for y in lines:
+            start = y * area.width + 1
+            end = start + area.width - 2
+            area.area[start:end] = [i] * (area.width - 2)
+        # HACK: draw outside of game loop
+        # TODO: ? drawing to screen does not work here
+        window.erase()
+        draw(area, screen_offset_x, screen_offset_y, window)
 
-        # Alternate algorithms
-        # 90°  idx w * (w-1) + y - w * x
-        # 180° idx w * w - 1 - w * y - x
-        # 270° idx w - 1 - y + w * x
-        idx = [
-            y * w + x,
-            (w - 1 - x) * w + y,            # new_x = y; new_y = width - 1 - x; idx = new_y * width + new_x
-            (w - 1 - y) * w + (w - 1 - x),  # new_x = w - 1 - x; new_y = w - 1 - y; idx = new_y * width + new_x
-            x * w + (w-1) - y               # new_x = (width - 1) - y; new_y = x; idx = new_y * width + new_x      
-        ][rotation]
 
-        # cleaner rotation
-        if rotation == 2:
-            y -= 1
-        if rotation == 3:
-            x += 1
+def fits(block, area, offset_x, offset_y, rotation):
+    _block = copy(block)
+    _block.rotate(rotation)
+    for x, y in _block.get_points():
+        # project new block position for point on area
+        area_x = x + _block.offset_x + offset_x
+        area_y = y + _block.offset_y + offset_y
+        # don't check out of bounds
+        if area_y > area.height - 1:
+            continue
 
-        x += offset_x
-        y += offset_y
-        if piece[idx] == 1:
-            # curses uses y, x
-            window.addch(y, x, BLOCK_CHAR)
+        block_value = _block.get_point(x, y)
+        area_value = area.get_point(area_x, area_y)
+
+        # if any of the points overlap, return False
+        if block_value > 0 and area_value > 0:
+            return False
+
+    return True
+
+
+def register_block(block, area):
+    # write block to area
+    for x, y in block.get_points():
+        area_x = x + block.offset_x
+        area_y = y + block.offset_y
+        # don't check out of bounds
+        if area_y > area.height - 1:
+            continue
+
+        block_value = block.get_point(x, y)
+        if block_value > 0:
+            idx = area_y * area.width + area_x
+            area.area[idx] = block.get_point(x, y)
+
+    # check for lines
+    lines = []
+    for y in range(block.offset_y, block.offset_y + 4):
+        if y < area.height - 1:
+            start = y * area.width + 1
+            end = start + area.width - 2
+            if min(area.area[start:end]):
+                 lines.append(y)
+    return lines
+
+
+def draw(asset, screen_offset_x, screen_offset_y, window):
+    # loop over all points in the asset area
+    w = asset.width
+    for x, y in asset.get_points():
+        value = asset.get_point(x, y) 
+
+        # handle screen offsets
+        x = x + screen_offset_x + asset.offset_x
+        y = y + screen_offset_y + asset.offset_y
+
+        # curses uses y, x
+        if value == 9:
+            window.addch(y, x, WALL_CHAR)
+        elif value == 0:
+            pass
+        else:
+            window.addch(y, x, BLOCK_CHAR, curses.color_pair(value))
 
 
 def main(stdscr):
-    stdscr.timeout(50)
-
-    stdscr.keypad(1)
-
-    # invisible cursor
-    curses.curs_set(0)
-
-    # initial screen
+    # screen setup
+    stdscr.timeout(100)
+    stdscr.keypad(1)    # handle escape chars
+    curses.curs_set(0)  # invisible cursor
+    curses.init_pair(1, curses.COLOR_CYAN, curses.COLOR_BLACK)
+    curses.init_pair(2, curses.COLOR_YELLOW, curses.COLOR_BLACK)
+    curses.init_pair(3, curses.COLOR_GREEN, curses.COLOR_BLACK)
+    curses.init_pair(4, curses.COLOR_MAGENTA, curses.COLOR_BLACK)
+    curses.init_pair(5, curses.COLOR_WHITE, curses.COLOR_BLACK)
+    curses.init_pair(6, curses.COLOR_BLUE, curses.COLOR_BLACK)
+    curses.init_pair(7, curses.COLOR_RED, curses.COLOR_BLACK)
     stdscr.clear()
 
-    # random block
-    piece = choice(tetrominoes.blocklist)
-    rotation, offset_x, offset_y = 0, 20, 5
+    counter = 0
+    pause = False
+    score = 0
+
+    # area
+    area = Area()
+
+    # first block
+    next_block = choice(tetrominoes.blocklist)()
+    new_block = True
 
     # game loop
     while True:
+        # draw offsets for the screen
+        max_y, max_x = stdscr.getmaxyx()
+        screen_offset_x = max_x // 2 - area.width // 2
+        screen_offset_y = max_y //2 - area.height // 2
+
+        if new_block:
+            block = next_block
+            if not fits(block, area, 0, 0, 0):
+                break
+
+            score += 25
+            next_block = choice(tetrominoes.blocklist)()
+            new_block = False
+
+        # force block down
+        if not pause and counter % 10 == 0:
+            if fits(block, area, 0, +1, 0):
+                block.move_y(+1)
+            else:
+                new_block = True
+
+                lines = register_block(block, area)
+
+                # remove cleared lines
+                # TODO: there is probably a more elegant
+                #       way to delete lines from the area
+                if lines:
+                    # animation
+                    flash_lines(area, lines, screen_offset_x, screen_offset_y, stdscr)
+
+                    for y in lines:
+                        start = y * area.width
+                        end = start + area.width
+                        del area.area[start:end]
+                        area.area = blank_line(area) + area.area
+
+                    if len(lines) == 4:
+                        score += 1200
+                    else:
+                        score += (len(lines) * 100)
+
+        counter += 1
+
         try:
+            # handle user input
             key = stdscr.getkey()
 
-            if key == CONFIG_KEY_ROTATE_LEFT:
-                rotation -= 1
-            if key == CONFIG_KEY_ROTATE_RIGHT:
-                rotation += 1
-            if key == CONFIG_KEY_LEFT:
-                offset_x -= 1
-            if key == CONFIG_KEY_DOWN:
-                offset_y += 1
-            if key == CONFIG_KEY_RIGHT:
-                offset_x += 1
-            if key == CONFIG_KEY_ROTATE_QUIT:
-                break
-            if key == "c":
-                offset_x = 20
-                offset_y = 5
-                rotation = 0
-                piece = choice(tetrominoes.blocklist)
+            if not pause or DEBUG:
+                if key == CONFIG_KEY_ROTATE_LEFT:
+                    if fits(block, area, 0, 0, -1):
+                        block.rotate(-1)
+                if key == CONFIG_KEY_ROTATE_RIGHT:
+                    if fits(block, area, 0, 0, +1):
+                        block.rotate(+1)
+                if key == CONFIG_KEY_LEFT:
+                    if fits(block, area, -1, 0, 0):
+                        block.move_x(-1)
+                if key == CONFIG_KEY_DOWN:
+                    if fits(block, area, 0, +1, 0):
+                        block.move_y(+1)
+                if key == CONFIG_KEY_RIGHT:
+                    if fits(block, area, +1, 0, 0):
+                        block.move_x(+1)
 
-            if rotation < 0:
-                rotation = 3
-            if rotation > 3:
-                rotation = 0
+            if key == CONFIG_KEY_PAUSE:
+                pause = not pause
+            if key == CONFIG_KEY_QUIT:
+                break
+
+
+            if DEBUG:
+                if key == CONFIG_KEY_UP:
+                    if fits(block, area, 0, +1, 0):
+                        block.move_y(-1)
+                if key == "c":
+                    new_block = True
         except:
             pass
 
+        #
+        # screen output
+        #
+
         stdscr.erase()
-        draw_field(stdscr)
-        draw_piece(piece, rotation, BLOCK_WIDTH, offset_x, offset_y, stdscr)
+        # screen
+        draw(area, screen_offset_x, screen_offset_y, stdscr)
+        # block
+        draw(block, screen_offset_x, screen_offset_y, stdscr)
+        # score
+        stdscr.addstr(screen_offset_y, screen_offset_x + 15, f"Score: {score}")
+        # next block
+        stdscr.addstr(screen_offset_y + 2, screen_offset_x + 15, "Next block:")
+        draw(next_block, screen_offset_x + 10, screen_offset_y + 4, stdscr)
+        # pause
+        stdscr.addstr(screen_offset_y + 10, screen_offset_x + 15, "GAME PAUSED" if pause else "")
+
+        # debug
+        stdscr.addstr(screen_offset_y + 15, screen_offset_x + 15, f"R {block.rotation}")
+
+    return score
 
 
 if __name__ == "__main__":
-    curses.wrapper(main)
+    score = curses.wrapper(main)
+    print(f"GAME OVER - Your score was: {score}")
