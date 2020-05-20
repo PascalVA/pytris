@@ -20,6 +20,7 @@ CONFIG_KEY_DOWN = "s"
 CONFIG_KEY_RIGHT = "d"
 CONFIG_KEY_ROTATE_LEFT = "q"
 CONFIG_KEY_ROTATE_RIGHT = "e"
+CONFIG_KEY_HOLD_BLOCK = "c"
 CONFIG_KEY_PAUSE = "p"
 CONFIG_KEY_QUIT = "x"
 
@@ -156,6 +157,9 @@ def main(stdscr):
     # area
     area = Area()
 
+    # contains the block the user put in hold
+    held_block = None
+
     # first block
     next_block = choice(tetrominoes.blocklist)()
     new_block = True
@@ -169,6 +173,8 @@ def main(stdscr):
 
         if new_block:
             block = next_block
+            # copy block without offsets for held_block
+            block_copy = copy(block)
             if not fits(block, area, 0, 0, 0):
                 break
 
@@ -225,18 +231,24 @@ def main(stdscr):
                 if key == CONFIG_KEY_RIGHT:
                     if fits(block, area, +1, 0, 0):
                         block.move_x(+1)
+                if key == CONFIG_KEY_HOLD_BLOCK:
+                    if held_block is None:
+                        held_block = copy(block_copy)
+                        new_block = True
+                    else:
+                        held_block, block = (copy(block_copy), copy(held_block))
+                        block_copy = copy(block)
 
             if key == CONFIG_KEY_PAUSE:
                 pause = not pause
             if key == CONFIG_KEY_QUIT:
                 break
 
-
             if DEBUG:
                 if key == CONFIG_KEY_UP:
                     if fits(block, area, 0, +1, 0):
                         block.move_y(-1)
-                if key == "c":
+                if key == "v":
                     new_block = True
         except:
             pass
@@ -252,12 +264,13 @@ def main(stdscr):
         draw(block, screen_offset_x, screen_offset_y, stdscr)
         # score
         stdscr.addstr(screen_offset_y, screen_offset_x + 15, f"Score: {score}")
+        if held_block is not None:
+            draw(held_block, screen_offset_x - 10, screen_offset_y, stdscr)
         # next block
         stdscr.addstr(screen_offset_y + 2, screen_offset_x + 15, "Next block:")
         draw(next_block, screen_offset_x + 10, screen_offset_y + 4, stdscr)
         # pause
         stdscr.addstr(screen_offset_y + 10, screen_offset_x + 15, "GAME PAUSED" if pause else "")
-
         # debug
         stdscr.addstr(screen_offset_y + 15, screen_offset_x + 15, f"R {block.rotation}")
 
