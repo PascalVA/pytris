@@ -3,13 +3,17 @@
 from random import choice
 from time import sleep
 from copy import copy
+from playsound import playsound
 
 import curses
 import sys
 
 from assets import tetrominoes
+from multiprocessing import Process
+from os import path
+from random import shuffle
 
-DEBUG = True
+DEBUG = False
 
 BLOCK_CHAR = "█"
 WALL_CHAR = "█"
@@ -22,7 +26,7 @@ CONFIG_KEY_ROTATE_LEFT = "q"
 CONFIG_KEY_ROTATE_RIGHT = "e"
 CONFIG_KEY_HOLD_BLOCK = "c"
 CONFIG_KEY_PAUSE = "p"
-CONFIG_KEY_QUIT = "x"
+CONFIG_KEY_QUIT = "n"
 
 
 class Area(object):
@@ -277,6 +281,28 @@ def main(stdscr):
     return score
 
 
+def background_music():
+    """playsound on linux does not yet support non-blocking play
+    """
+    playlist = list(
+        filter(
+            lambda f: path.exists(f),
+            ['assets/typea.mp3', 'assets/typeb.mp3', 'assets/typec.mp3'])
+    )
+    if not playlist:
+        return
+    shuffle(playlist)
+    while True:
+        for i in playlist:
+            try:
+                playsound(i)
+            except:
+                pass
+
+
 if __name__ == "__main__":
+    p = Process(target=background_music)
+    p.start()
     score = curses.wrapper(main)
     print(f"GAME OVER - Your score was: {score}")
+    p.kill()
